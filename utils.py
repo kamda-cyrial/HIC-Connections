@@ -13,6 +13,7 @@ def get_db_handle():
 
 
 LOGIN_DATABASE = "Users"
+QUERY_DATABASE = "Queries"
 
 
 def get_jwt_keys():

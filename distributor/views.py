@@ -2,9 +2,9 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.status import HTTP_400_BAD_REQUEST, HTTP_409_CONFLICT, HTTP_200_OK
 from rest_framework.exceptions import ValidationError
-from utils import get_db_handle, LOGIN_DATABASE, get_jwt_keys
+from utils import get_db_handle, LOGIN_DATABASE, get_jwt_keys, QUERY_DATABASE
 import jwt
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def authenticate_expected(request, expected_keys):
@@ -18,6 +18,19 @@ def authenticate_expected(request, expected_keys):
             errors.append(f"Unexpected key {key}")
     if errors:
         raise ValidationError(errors)
+
+
+def authenticate_token(request):
+    token = request.data["auth_token"]
+    _private_key, public_key = get_jwt_keys()
+    try:
+        decoded_token = jwt.decode(token, public_key, algorithms=["ES256"], verify=True)
+    except jwt.exceptions.InvalidSignatureError:
+        raise ValidationError("Invalid token signature")
+    except jwt.exceptions.ExpiredSignatureError:
+        raise ValidationError("Token has expired")
+    print(decoded_token)
+    return decoded_token
 
 
 # Create your views here.
@@ -81,11 +94,46 @@ def signin(request):
             status=HTTP_400_BAD_REQUEST,
         )
 
-    private_key, _public_key = get_jwt_keys()
+    private_key, public_key = get_jwt_keys()
+    now = datetime.now(tz=timezone.utc).timestamp()
     encoded_details = {
         "username": user["username"],
-        "exp": datetime.utcnow().timestamp() + 3600,
-        "origin": "Connections By KSU Students, Spring 2023",
+        "exp": now + 3600,
+        "iss": "Connections By KSU Students, Spring 2023",
+        "signer": public_key,
     }
+
     token = jwt.encode(encoded_details, private_key, algorithm="ES256")
     return Response({"success": True, "token": token}, status=HTTP_200_OK)
+
+
+@api_view(["POST"])
+def query(request):
+    db_handle, _client = get_db_handle()
+    excpected_keys = [
+        "query_data",
+        "auth_token",
+        "query_categories",
+    ]
+    authenticate_expected(request, excpected_keys)
+    auth_data = authenticate_token(request)
+
+    for query_category in request.data["query_categories"]:
+        if query_category not in request.data["query_data"]:
+            raise ValidationError(f"Category {query_category} not in query data")
+        if len(request.data["query_data"][query_category]) == 0:
+            raise ValidationError(f"Category {query_category} is empty")
+    for category in request.data["query_data"]:
+        if category not in request.data["query_categories"]:
+            raise ValidationError(f"Category {category} not in query categories")
+
+    query_data = {}
+    query_data["query"] = request.data["query_data"]
+    query_data["username"] = auth_data["username"]
+    query_data["timestamp"] = datetime.now(tz=timezone.utc).timestamp()
+    query_data["status"] = "pending"
+    query_data["categories"] = request.data["query_categories"]
+
+    insert_result = db_handle[QUERY_DATABASE].insert_one(query_data)
+    query_id = insert_result.inserted_id
+    return Response({"success": True, "query_id": str(query_id)}, status=HTTP_200_OK)

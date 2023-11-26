@@ -16,9 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from distributor.views import signup, signin
+from distributor.views import signup, signin, query
 
 urlpatterns = [
     path("signup/", signup),
     path("signin/", signin),
+    path("query/", query),
 ]
