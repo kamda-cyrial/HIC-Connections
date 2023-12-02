@@ -1,3 +1,4 @@
+from bson import ObjectId
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework.status import HTTP_400_BAD_REQUEST, HTTP_409_CONFLICT, HTTP_200_OK
@@ -29,7 +30,6 @@ def authenticate_token(request):
         raise ValidationError("Invalid token signature")
     except jwt.exceptions.ExpiredSignatureError:
         raise ValidationError("Token has expired")
-    print(decoded_token)
     return decoded_token
 
 
@@ -137,3 +137,45 @@ def query(request):
     insert_result = db_handle[QUERY_DATABASE].insert_one(query_data)
     query_id = insert_result.inserted_id
     return Response({"success": True, "query_id": str(query_id)}, status=HTTP_200_OK)
+
+
+@api_view(["GET"])
+def get_queue_depth(_request):
+    db_handle, _client = get_db_handle()
+    tmp_query = {"status": "pending"}
+    pending_queries = db_handle[QUERY_DATABASE].find(tmp_query)
+    return Response(
+        {"success": True, "queue_depth": pending_queries.count()}, status=HTTP_200_OK
+    )
+
+
+@api_view(["POST"])
+def get_query_document(request):
+    db_handle, _client = get_db_handle()
+    excpected_keys = [
+        "query_id",
+        "auth_token",
+    ]
+    authenticate_expected(request, excpected_keys)
+    auth_data = authenticate_token(request)
+    query_id = request.data["query_id"]
+    query_data = db_handle[QUERY_DATABASE].find_one({"_id": ObjectId(query_id)})
+    del query_data["_id"]
+    if not query_data:
+        return Response(
+            {"success": False, "error": "Invalid query ID"},
+            status=HTTP_400_BAD_REQUEST,
+        )
+    if query_data["username"] != auth_data["username"]:
+        return Response(
+            {"success": False, "error": "unAuthorized query ID from user"},
+            status=HTTP_400_BAD_REQUEST,
+        )
+
+    if query_data["status"] == "pending":
+        tmp_query = {"status": "pending", "timestamp": {"$lt": query_data["timestamp"]}}
+        pending_queries = db_handle[QUERY_DATABASE].find(tmp_query)
+        query_data["queue_position"] = pending_queries.count()
+
+    query_data["success"] = True
+    return Response(query_data, status=HTTP_200_OK)
